@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "DoMap",
+    "slug": "DoMap",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Приложению нужен доступ к вашему местоположению, чтобы показывать вас на карте и предупреждать о приближении к сохранённым местам."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#FFF5F8"
+      }
+    },
+    "platforms": ["android", "ios"],
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#FFF5F8",
+          "dark": {
+            "backgroundColor": "#1A0B12"
+          }
+        }
+      ],
+      "expo-asset",
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Приложению нужен доступ к вашему местоположению, чтобы показывать вас на карте и предупреждать о приближении к сохранённым местам."
+        }
+      ],
+      ["expo-notifications", { "color": "#C2185B" }]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Патчи patch-package всегда с LF: с переводами строк Windows (CRLF) патч может не примениться.
+*.patch text eol=lf
