@@ -6,6 +6,8 @@ import * as initial from '@/database/migrations/001_initial';
 
 interface Migration {
   version: number;
+  // Только «вперёд»: откатов нет. Если миграция сломалась — база откатится
+  // транзакцией и останется на предыдущей версии, чинить нужно код.
   up: (db: SQLiteDatabase) => Promise<void>;
 }
 
@@ -15,6 +17,8 @@ interface Migration {
  */
 const MIGRATIONS: Migration[] = [{ version: 1, up: initial.up }];
 
+// Последняя версия схемы. По ней проверяется «база из будущего»:
+// если в базе номер больше — приложение старое и трогать её нельзя.
 export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
 
 /**
@@ -25,11 +29,13 @@ export const LATEST_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
  * если она упадёт, база откатится и останется на предыдущей версии, а не «наполовину».
  */
 export async function migrateDatabase(db: SQLiteDatabase): Promise<void> {
+  // PRAGMA user_version —служебное поле заголовка базы.
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const currentVersion = row?.user_version ?? 0;
 
   if (currentVersion > LATEST_VERSION) {
     // База создана более новой версией приложения — старый код может её испортить.
+    // Останавливаемся до любых изменений, чтобы не испортить данные пользователя.
     throw new DatabaseError(
       'init',
       `Версия базы ${currentVersion} новее поддерживаемой ${LATEST_VERSION}`,
@@ -37,6 +43,8 @@ export async function migrateDatabase(db: SQLiteDatabase): Promise<void> {
     );
   }
 
+  // Идём по всем миграциям по порядку и применяем только те, что новее текущей.
+  // Условие <= currentVersion, а не < — так пропускаются уже применённые.
   for (const migration of MIGRATIONS) {
     if (migration.version <= currentVersion) {
       continue;
@@ -44,6 +52,8 @@ export async function migrateDatabase(db: SQLiteDatabase): Promise<void> {
     await withLogging(
       `migration v${migration.version}`,
       () =>
+        // Транзакция охватывает и саму миграцию, и запись новой версии:
+        // нельзя оказаться в состоянии «схема новая, а номер старый» (или наоборот).
         db.withTransactionAsync(async () => {
           await migration.up(db);
           // PRAGMA не принимает параметры «?», но здесь число из нашего же кода.

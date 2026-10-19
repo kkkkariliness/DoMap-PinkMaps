@@ -40,6 +40,8 @@ export default function MarkerDetailsScreen() {
   // Черновик нового названия; null — окно переименования закрыто.
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
 
+  // Фото живут в локальном состоянии: контекст отдаёт только сводку (imageCount),
+  // а полный список нужен лишь этому экрану.
   const [images, setImages] = useState<MarkerImage[]>([]);
   const [imagesLoading, setImagesLoading] = useState(true);
   const [imagesError, setImagesError] = useState<string | null>(null);
@@ -78,6 +80,7 @@ export default function MarkerDetailsScreen() {
         }
       });
 
+    // Экран закрыли до ответа базы — поздний результат уже не нужен.
     return () => {
       cancelled = true;
     };
@@ -119,12 +122,12 @@ export default function MarkerDetailsScreen() {
     );
   }
 
+  // Добавление фотографий. 
   const pickImage = async () => {
     try {
       setIsAddingImage(true);
 
-      // На iOS доступ к галерее нужно спросить, на Android современных версий — нет,
-      // но вызов безопасен на обеих платформах.
+      // На iOS доступ к галерее нужно спросить, на Android — нет. 
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         Alert.alert(
@@ -172,6 +175,7 @@ export default function MarkerDetailsScreen() {
   const saveTitle = async () => {
     const nextTitle = draftTitle;
     setDraftTitle(null);
+    // Пустое название не сохраняем: у места должно остаться хоть какое-то имя.
     if (nextTitle === null || !nextTitle.trim()) {
       return;
     }
@@ -183,6 +187,7 @@ export default function MarkerDetailsScreen() {
   };
 
   const confirmRemoveMarker = () => {
+    // Удаление необратимо — сначала подтверждение, действие только по кнопке.
     Alert.alert('Удалить место?', `«${marker.title}» и все его фотографии.`, [
       { text: 'Отмена', style: 'cancel' },
       {
@@ -234,9 +239,12 @@ export default function MarkerDetailsScreen() {
 
       <View style={styles.sectionHeader}>
         <Text style={[styles.sectionTitle, { color: theme.text }]}>Фотографии</Text>
+        {/* Счётчик из контекста: он обновляется сразу после записи, ещё до перечитывания фото. */}
         <Text style={[styles.sectionCount, { color: theme.textMuted }]}>{marker.imageCount}</Text>
       </View>
 
+      {/* Индикатор активности показываем только при первом чтении: при обновлении после удаления
+          фото уже есть в состоянии, и мигать индикатором незачем. */}
       {imagesError ? (
         <View style={styles.imagesState}>
           <Text style={[styles.notFoundText, { color: theme.danger }]}>{imagesError}</Text>
@@ -247,6 +255,7 @@ export default function MarkerDetailsScreen() {
       ) : imagesLoading && images.length === 0 ? (
         <ActivityIndicator color={theme.tint} />
       ) : (
+        // removeImage асинхронный, а ImageList ждёт синхронный onRemove — оборачиваем в void.
         <ImageList images={images} onRemove={(imageId) => void removeImage(imageId)} />
       )}
 
@@ -285,6 +294,8 @@ export default function MarkerDetailsScreen() {
               onChangeText={setDraftTitle}
               placeholder="Название места"
               placeholderTextColor={theme.textMuted}
+              // На Android autoFocus конфликтует с анимацией модалки — клавиатура
+              // открывается рывком.
               autoFocus={Platform.OS !== 'android'}
               returnKeyType="done"
               onSubmitEditing={() => void saveTitle()}

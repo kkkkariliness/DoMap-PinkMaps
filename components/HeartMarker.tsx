@@ -10,6 +10,8 @@ type Props = {
   marker: MapMarker;
   theme: AppTheme;
   onCalloutPress: MapMarkerProps['onCalloutPress'];
+  // Callout передаётся снаружи как children: метка не знает, что показывать
+  // в облачке — это решает экран карты.
   children?: React.ReactNode;
 };
 
@@ -24,7 +26,10 @@ type Props = {
  */
 export default function HeartMarker({ marker, theme, onCalloutPress, children }: Props) {
   const hasImages = marker.imageCount > 0;
+  // tracksViewChanges — отдельный стейт: им управляют два события (смена иконки и таймер).
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
+  // trackedHasImages запоминает, для какого состояния иконки сейчас снят снимок метки.
+  // Сравнивая его с hasImages, замечаем момент, когда картинку нужно перерисовать.
   const [trackedHasImages, setTrackedHasImages] = useState(hasImages);
 
   // Иконка меняется при добавлении первой фотографии — снимок метки нужно обновить.
@@ -34,6 +39,9 @@ export default function HeartMarker({ marker, theme, onCalloutPress, children }:
     setTracksViewChanges(true);
   }
 
+  // Через 2 секунды после смены иконки выключаем перерисовку — метка уже отрисована.
+  // Зависимость от hasImages, а не от tracksViewChanges: таймер должен перезапускаться
+  // при смене иконки, а не при каждом переключении флага.
   useEffect(() => {
     const timer = setTimeout(() => setTracksViewChanges(false), 2000);
     return () => clearTimeout(timer);
@@ -51,10 +59,10 @@ export default function HeartMarker({ marker, theme, onCalloutPress, children }:
           name={hasImages ? 'favorite' : 'favorite-border'}
           size={38}
           color={theme.tint}
-          // Белая обводка, чтобы сердце читалось на любой карте.
           style={styles.icon}
         />
       </View>
+      {/* Дочерние элементы react-native-maps показываются в облачке по нажатию на метку. */}
       {children}
     </Marker>
   );

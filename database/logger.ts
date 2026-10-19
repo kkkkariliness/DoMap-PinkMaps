@@ -5,7 +5,6 @@ import { toDatabaseError } from '@/database/errors';
  *
  * В режиме разработки пишет в консоль имя операции и время выполнения,
  * а любую ошибку превращает в DatabaseError — дальше по коду другие ошибки не уходят.
- * В релизной сборке (__DEV__ === false) логов нет.
  */
 export async function withLogging<T>(
   operation: string,

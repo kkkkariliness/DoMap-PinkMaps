@@ -16,6 +16,7 @@ import { initDatabase } from '@/database/schema';
 import { deleteImageFile, persistImageFile } from '@/lib/storage';
 import type { MapMarker, MarkerImage } from '@/types';
 
+// Подставляется, если пользователь сохранил место без названия.
 const DEFAULT_TITLE = 'Новое место';
 
 export interface DatabaseContextType {
@@ -66,6 +67,7 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<DatabaseError | null>(null);
   // Смена номера попытки перезапускает эффект открытия базы.
+  // State, а не ref: смена значения должна вызвать ререндер и перезапуск useEffect.
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -94,6 +96,7 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
           setError(toDatabaseError(caught, 'init'));
         }
       } finally {
+        // isLoading сбрасываем только если компонент ещё смонтирован.
         if (!cancelled) {
           setIsLoading(false);
         }
@@ -125,8 +128,12 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
         }
         return task(db);
       });
+      // Ошибку из очереди гасим до undefined: следующая операция должна
+      // выполниться, а не унаследовать rejected-обещание предыдущей.
       queueRef.current = run.catch(() => undefined);
 
+      // А вызывающему пробрасываем нормализованную ошибку, чтобы экран
+      // не разбирал тексты SQLite сам.
       return run.catch((caught: unknown) => {
         const dbError = toDatabaseError(caught, 'operation');
         // Потеря соединения касается всего приложения — показываем её на экранах.
@@ -150,6 +157,8 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
    * прошла — поэтому ошибку только логируем, а не бросаем вызывающему.
    */
   const afterWrite = useCallback(async () => {
+    // revision растёт сразу — экраны, которые читают данные сами (например,
+    // список фото на экране места), перечитают их, даже если getMarkers ниже упадёт.
     setRevision((value) => value + 1);
     await getMarkers().catch((caught: unknown) =>
       console.warn('Не удалось перечитать список мест', caught),
@@ -182,9 +191,12 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
 
   const deleteMarker = useCallback(
     async (id: number) => {
+      // operations.deleteMarker внутри транзакции читает пути фото и удаляет маркер
+      // (фото уходят каскадом). Возвращает uris, чтобы мы убрали файлы с диска.
       const uris = await enqueue((db) => operations.deleteMarker(db, id));
       await afterWrite();
       // Файлы удаляем после базы: если не выйдет, список на экране уже верный.
+      // Promise.all + catch(logFileError) — один сбой не отменяет удаления остальных.
       await Promise.all(uris.map((uri) => deleteImageFile(uri))).catch(logFileError);
     },
     [enqueue, afterWrite],
@@ -208,6 +220,8 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
 
   const deleteImage = useCallback(
     async (id: number) => {
+      // operations.deleteImage в транзакции читает путь и удаляет строку —
+      // возвращает uri файла, который нужно удалить с диска, или null.
       const uri = await enqueue((db) => operations.deleteImage(db, id));
       await afterWrite();
       if (uri) {
@@ -222,6 +236,9 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
     [enqueue],
   );
 
+  // value пересоздаётся при изменении любого поля: иначе потребители useDatabase()
+  // не увидят новые markers/revision/error и не перерисуются.
+  // Функции стабильны (useCallback), но зависят от enqueue/afterWrite — поэтому в списке.
   const value = useMemo<DatabaseContextType>(
     () => ({
       addMarker,
@@ -256,16 +273,24 @@ export function DatabaseProvider({ children }: PropsWithChildren) {
   return <DatabaseContext.Provider value={value}>{children}</DatabaseContext.Provider>;
 }
 
-/** Доступ к базе. Вне DatabaseProvider вызывать нельзя — это ошибка разработчика. */
+/** Доступ к базе. Вне DatabaseProvider вызывать нельзя. */
 export function useDatabase(): DatabaseContextType {
   const context = useContext(DatabaseContext);
+  // Явная ошибка лучше, чем невнятный «cannot read property of null» где-то
+  // глубоко в вызывающем компоненте.
   if (!context) {
     throw new Error('useDatabase должен вызываться внутри <DatabaseProvider>');
   }
   return context;
 }
 
-/** Текст ошибки для пользователя: у DatabaseError он готов, для прочих — общий. */
+/**
+ * Текст ошибки для пользователя.
+ *
+ * У DatabaseError уже есть готовое userMessage (database/errors.ts).
+ * Для прочих ошибок (не из слоя базы) показываем fallback — так экран не зависит
+ * от формата исключений конкретных библиотек.
+ */
 export function errorMessage(error: unknown, fallback: string): string {
   return error instanceof DatabaseError ? error.userMessage : fallback;
 }

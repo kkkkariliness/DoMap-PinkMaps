@@ -10,6 +10,9 @@ import type { MapMarker, MarkerImage } from '@/types';
  * Значения всегда передаются параметрами «?» — никакой склейки SQL из строк.
  */
 
+// Строки таблиц описываем отдельно от MapMarker/MarkerImage: в базе поля в snake_case
+// (image_count, created_at), в приложении — в camelCase. Конвертация ниже, в toMarker/toImage,
+// чтобы всё приведение типов жило в одном месте, а не расползалось по экранам.
 interface MarkerRow {
   id: number;
   title: string;
@@ -32,10 +35,14 @@ function parseTimestamp(value: string | null): number {
   if (!value) {
     return 0;
   }
+  // SQLite отдаёт пробел вместо «T» — подменяем и добавляем «Z»,
+  // иначе Date.parse может понять строку как локальное время.
   const ms = Date.parse(`${value.replace(' ', 'T')}Z`);
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+// toMarker и toImage — единственное место, где строки БД превращаются в типы приложения.
+// Если в схеме появится новое поле, ошибка всплывёт здесь, а не на экранах.
 function toMarker(row: MarkerRow): MapMarker {
   return {
     id: row.id,
@@ -70,6 +77,8 @@ async function inTransaction<T>(db: SQLiteDatabase, task: () => Promise<T>): Pro
   await db.withTransactionAsync(async () => {
     result = await task();
   });
+  // TypeScript не знает, что task выполнится ровно один раз, и считает result
+  // потенциально undefined. Рантайм гарантирует, что значение есть.
   return result as T;
 }
 
@@ -81,6 +90,8 @@ export function insertMarker(
   longitude: number,
   title: string,
 ): Promise<number> {
+  // withLogging нормализует ошибку в DatabaseError и добавляет имя операции —
+  // по нему потом в логах видно, какой запрос упал.
   return withLogging('addMarker', async () => {
     const result = await db.runAsync(
       'INSERT INTO markers (title, latitude, longitude) VALUES (?, ?, ?)',
@@ -88,6 +99,8 @@ export function insertMarker(
       latitude,
       longitude,
     );
+    // lastInsertRowId — id новой строки (AUTOINCREMENT). Нужен, чтобы сразу
+    // открыть экран созданного места.
     return result.lastInsertRowId;
   });
 }
@@ -95,6 +108,9 @@ export function insertMarker(
 export function updateMarkerTitle(db: SQLiteDatabase, id: number, title: string): Promise<void> {
   return withLogging('renameMarker', async () => {
     const result = await db.runAsync('UPDATE markers SET title = ? WHERE id = ?', title, id);
+    // UPDATE без совпадений не ошибка SQLite — просто ничего не изменилось.
+    // Проверяем changes вручную: иначе пользователь думает, что переименовал,
+    // а маркера уже нет (удалили в другой вкладке или на другом экране).
     if (result.changes === 0) {
       throw new DatabaseError('constraint', `renameMarker: маркера ${id} нет`, {
         userMessage: 'Место уже удалено.',
@@ -116,6 +132,9 @@ export function deleteMarker(db: SQLiteDatabase, id: number): Promise<string[]> 
     'deleteMarker',
     () =>
       inTransaction(db, async () => {
+        // Сначала читаем пути файлов: после DELETE ON DELETE CASCADE уже нечего читать.
+        // Порядок «прочитать → удалить» внутри транзакции — иначе файл остался бы
+        // на диске без записи в базе.
         const images = await db.getAllAsync<{ uri: string }>(
           'SELECT uri FROM marker_images WHERE marker_id = ?',
           id,
@@ -130,6 +149,9 @@ export function deleteMarker(db: SQLiteDatabase, id: number): Promise<string[]> 
 /** Все маркеры, новые сверху, с количеством фото и последним фото для превью. */
 export function selectMarkers(db: SQLiteDatabase): Promise<MapMarker[]> {
   return withLogging('getMarkers', async () => {
+    // Один запрос вместо N+1: подзапросы в SELECT считают количество и берут превью
+    // для каждого маркера без отдельного обращения к базе на каждую строку.
+    // Подзапросы быстрые — по marker_id есть индекс (idx_marker_images_marker_id).
     const rows = await db.getAllAsync<MarkerRow>(`
       SELECT
         m.id, m.title, m.latitude, m.longitude, m.created_at,
@@ -153,6 +175,7 @@ export function insertImage(db: SQLiteDatabase, markerId: number, uri: string): 
       markerId,
       uri,
     );
+    // id пригодится, если понадобится удалить именно это фото сразу после создания.
     return result.lastInsertRowId;
   });
 }
@@ -163,11 +186,14 @@ export function deleteImage(db: SQLiteDatabase, id: number): Promise<string | nu
     'deleteImage',
     () =>
       inTransaction(db, async () => {
+        // Сначала читаем путь — после DELETE строки уже нет.
         const row = await db.getFirstAsync<{ uri: string }>(
           'SELECT uri FROM marker_images WHERE id = ?',
           id,
         );
         await db.runAsync('DELETE FROM marker_images WHERE id = ?', id);
+        // null вместо ошибки: двойное удаление из UI — не повод для сбоя.
+        // Файл, если он есть, вызывающий код удалит; если строки не было — нечего удалять.
         return row?.uri ?? null;
       }),
     { inTransaction: true },
@@ -177,6 +203,8 @@ export function deleteImage(db: SQLiteDatabase, id: number): Promise<string | nu
 /** Фото одного маркера, новые первыми. */
 export function selectMarkerImages(db: SQLiteDatabase, markerId: number): Promise<MarkerImage[]> {
   return withLogging('getMarkerImages', async () => {
+    // Порядок по id DESC совпадает с порядком создания: id монотонно растёт,
+    // отдельная сортировка по created_at не нужна.
     const rows = await db.getAllAsync<ImageRow>(
       'SELECT id, marker_id, uri, created_at FROM marker_images WHERE marker_id = ? ORDER BY id DESC',
       markerId,

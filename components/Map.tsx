@@ -50,6 +50,7 @@ export default function Map() {
   // Координаты, выбранные долгим нажатием, но ещё не подтверждённые названием.
   const [draftCoordinate, setDraftCoordinate] = useState<Coordinate | null>(null);
   const [title, setTitle] = useState('');
+  // Включается по кнопке «Где я»: точка видна сразу после разрешения, ещё до первого фикса трекера.
   const [showsUserLocation, setShowsUserLocation] = useState(false);
 
   const [location, setLocation] = useState<LocationState>({
@@ -94,8 +95,13 @@ export default function Map() {
   /** Отслеживание местоположения */
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
+    // cancelled защищает от позднего setState: пользователь мог уйти с экрана,
+    // пока шёл запрос разрешения или ждали первый фикс.
     let cancelled = false;
 
+    // Одна точка записи ошибки в state: сюда приходят и отказ в разрешении,
+    // и сбой watchPosition. cancelled здесь, а не в вызывающем коде — чтобы
+    // размонтированный экран не пытался обновить состояние.
     const fail = (locationError: LocationError) => {
       if (!cancelled) {
         setLocation({ coordinate: null, error: locationError, isTracking: false });
@@ -116,6 +122,8 @@ export default function Map() {
             if (!(notifyError instanceof NotificationPermissionError)) {
               console.warn('Не удалось подготовить уведомления', notifyError);
             }
+            // Неожиданную ошибку оборачиваем в наш класс, чтобы UI не зависел
+            // от того, что именно пошло не так внутри сервиса.
             setNotificationError(
               notifyError instanceof NotificationPermissionError
                 ? notifyError
@@ -144,6 +152,8 @@ export default function Map() {
           },
         );
 
+        // Пока шло отслеживание, экран могли закрыть — сразу прекращаем,
+        // иначе трекер остался бы работать в фоне.
         if (cancelled) {
           sub.remove();
           return;
@@ -162,6 +172,7 @@ export default function Map() {
 
     setup();
 
+    // remove() — единственный способ остановить watchPositionAsync.
     return () => {
       cancelled = true;
       subscription?.remove();
@@ -185,6 +196,8 @@ export default function Map() {
 
   /** Запустить отслеживание заново: кнопка «Повторить» на плашках ошибок. */
   const retryLocation = () => {
+    // Старую ошибку гасим сразу: иначе плашка висит поверх индикатора, пока
+    // setup делает запрос разрешения.
     setLocation((current) => ({ ...current, error: null }));
     setLocationAttempt((value) => value + 1);
   };
@@ -289,6 +302,9 @@ export default function Map() {
         theme={theme}
         initialCoordinate={INITIAL_COORDINATE}
         initialZoom={INITIAL_ZOOM}
+        // Точка появляется либо по кнопке «Где я» (showsUserLocation), либо как
+        // только трекер прислал первую координату (location.isTracking). Оба нужны:
+        // кнопка работает без активного трекинга, трекер — без нажатия на кнопку.
         showsUserLocation={showsUserLocation || location.isTracking}
         userCoordinate={location.coordinate}
         onReady={() => setIsMapReady(true)}
@@ -318,7 +334,9 @@ export default function Map() {
         </View>
       )}
 
-      {/* Плашки с ошибками: база данных, геолокация, уведомления. */}
+      {/* Плашки с ошибками: база данных, геолокация, уведомления.
+          box-none: контейнер прозрачен для касаний, ловят только сами плашки —
+          иначе он блокировал бы карту под пустыми местами между баннерами. */}
       <View style={styles.banners} pointerEvents="box-none">
         {error && (
           <Banner
@@ -331,6 +349,8 @@ export default function Map() {
           <Banner
             theme={theme}
             message={location.error.message}
+            // На заблокированное разрешение «Повторить» не поможет: система уже
+            // не покажет диалог. Единственный путь — настройки, поэтому они первыми.
             actions={
               location.error.kind === 'permission-blocked'
                 ? [settingsAction, retryAction]
@@ -342,6 +362,8 @@ export default function Map() {
           <Banner
             theme={theme}
             message={notificationError.message}
+            // canAskAgain: если диалог ещё возможен — хватит «Повторить»;
+            // если пользователь выбрал «Больше не спрашивать» — нужны настройки.
             actions={notificationError.canAskAgain ? [retryAction] : [settingsAction, retryAction]}
           />
         )}

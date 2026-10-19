@@ -9,12 +9,9 @@ import type { Coordinate, MapMarker } from '@/types';
 /**
  * Карта для Android.
  *
- * Встроенная карта Google в Expo Go остаётся пустой: у Expo Go нет действующего ключа
- * Google Maps, и без него не рисуются ни тайлы, ни сторонние слои. Задание при этом
- * рассчитано на Expo Go без ключей, поэтому карта собрана на MapLibre GL внутри WebView.
- *
- * MapLibre — векторная карта: масштаб плавный, подписи не размываются, доступны поворот
- * и наклон. Стиль и данные берутся у OpenFreeMap (карта OpenStreetMap), ключи не нужны.
+ * Встроенная карта Google в Expo Go остаётся пустой, карта собрана на MapLibre GL внутри WebView.
+ * 
+ * Стиль и данные берутся у OpenFreeMap (карта OpenStreetMap), ключи не нужны.
  *
  * Связь в обе стороны: страница шлёт события через postMessage, приложение вызывает
  * её функции через injectJavaScript.
@@ -32,6 +29,11 @@ type BridgeMessage =
   | { type: 'longpress'; latitude: number; longitude: number }
   | { type: 'marker'; id: string };
 
+/**
+ * Собирает HTML страницы с картой, подставляя цвета темы и начальные координаты.
+ * Плейсхолдеры __ИМЯ__ в HTML_TEMPLATE заменяются до загрузки страницы: так страница
+ * не мигает дефолтными цветами при старте.
+ */
 function buildHtml(theme: AppTheme, center: Coordinate, zoom: number, isDark: boolean): string {
   return HTML_TEMPLATE.replaceAll('__TINT__', theme.tint)
     .replaceAll('__ON_TINT__', theme.onTint)
@@ -54,12 +56,11 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
   // Страницу собираем один раз: перезагрузка сбрасывала бы положение карты.
   const html = useMemo(
     () => buildHtml(theme, initialCoordinate, initialZoom, isDark),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [theme.tint, theme.onTint, theme.background, isDark],
   );
 
   const run = useCallback((code: string) => {
-    // true в конце обязателен: иначе Android ругается на возвращаемое значение.
+    // true в конце обязателен: Android ругается на возвращаемое значение.
     webRef.current?.injectJavaScript(`${code}; true;`);
   }, []);
 
@@ -67,6 +68,8 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
     focus: (coordinate: Coordinate) => {
       run(`window.focusOn(${coordinate.latitude}, ${coordinate.longitude}, 15)`);
     },
+    // Нужен только для разового вызова из кнопки «Где я»: постоянное обновление
+    // точки идёт через проп userCoordinate и отдельный useEffect ниже.
     setUserLocation: (coordinate: Coordinate) => {
       run(`window.setUserLocation(${coordinate.latitude}, ${coordinate.longitude})`);
     },
@@ -82,12 +85,14 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
         longitude: marker.longitude,
         images: marker.imageCount,
       }));
+      // setMarkers && — защита от гонки: страница могла ещё не загрузиться.
       run(`window.setMarkers && window.setMarkers(${JSON.stringify(payload)})`);
     },
     [run],
   );
 
   const onMessage = (event: WebViewMessageEvent) => {
+    // Страница может прислать что угодно — парсим в try/catch, чтобы не падать.
     let message: BridgeMessage;
     try {
       message = JSON.parse(event.nativeEvent.data) as BridgeMessage;
@@ -122,6 +127,8 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
   }, [markers, sendMarkers]);
 
   // Каждое обновление координат пользователя двигает точку на карте.
+  // Первый вызов — когда трекер пришлёт первую координату; дальше — каждые 5 секунд
+  // или при смещении на 5 метров (см. services/location.ts).
   useEffect(() => {
     if (userCoordinate) {
       run(`window.setUserLocation(${userCoordinate.latitude}, ${userCoordinate.longitude})`);
@@ -132,9 +139,13 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
     <WebView
       ref={webRef}
       style={[StyleSheet.absoluteFill, { backgroundColor: theme.background }]}
+      // Разрешаем загрузку с любых источников: стили и скрипт MapLibre лежат на CDN,
+      // тайлы — на tiles.openfreemap.org. Без этого WebView заблокирует их.
       originWhitelist={['*']}
       source={{ html }}
       onMessage={onMessage}
+      // JavaScript обязателен — вся карта на нём. DOM storage нужен MapLibre
+      // для внутреннего кеша стиля и тайлов.
       javaScriptEnabled
       domStorageEnabled
       // Карту двигают пальцем — лишние полосы прокрутки не нужны.
@@ -185,6 +196,9 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
         window.ReactNativeWebView.postMessage(JSON.stringify(message));
       }
 
+      // center принимает [долгота, широта] — порядок обратный привычному.
+      // attributionControl compact: обязательная атрибуция OpenStreetMap,
+      // но в компактном виде, чтобы не занимала пол-экрана.
       var map = new maplibregl.Map({
         container: 'map',
         style: '__STYLE__',
@@ -202,6 +216,7 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
       });
 
       // Долгого нажатия в MapLibre нет — собираем его сами из касаний.
+      // pressMoved защищает от ложного срабатывания при перетаскивании карты.
       var pressTimer = null;
       var pressStart = null;
       var pressMoved = false;
@@ -231,6 +246,7 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
           return;
         }
         // Палец поехал — это перетаскивание карты, а не долгое нажатие.
+        // Порог 12 px отсекает дрожание пальца.
         if (Math.abs(touch.clientX - pressStart.x) > 12 || Math.abs(touch.clientY - pressStart.y) > 12) {
           pressMoved = true;
           clearTimeout(pressTimer);
@@ -243,6 +259,8 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
         }, { passive: true });
       });
 
+      // Сердце рисуем инлайновым SVG: не нужен отдельный файл и не мигает при загрузке.
+      // fill отличается для мест с фото (закрашенное) и без (контурное).
       function heartElement(filled) {
         var fill = filled ? '__TINT__' : 'rgba(255,255,255,0.75)';
         var element = document.createElement('div');
@@ -258,6 +276,7 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
       var userMarker = null;
 
       // Приложение вызывает эту функцию при каждом изменении списка мест.
+      // Старые маркеры удаляем: проще пересоздать, чем считать diff по id.
       window.setMarkers = function (markers) {
         markerObjects.forEach(function (marker) {
           marker.remove();
@@ -266,6 +285,7 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
 
         markers.forEach(function (item) {
           var subtitle = item.images > 0 ? 'Фотографий: ' + item.images : 'Фотографий пока нет';
+          // title экранируем: пользователь мог ввести < или кавычку в названии места.
           var popupHtml =
             '<div class="popup-title">' + escapeHtml(item.title) + '</div>' +
             '<div class="popup-sub">' + subtitle + '</div>' +
@@ -283,10 +303,13 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
         post({ type: 'marker', id: id });
       };
 
+      // flyTo, а не jumpTo: плавный перелёт показывает, куда именно сместилась карта.
       window.focusOn = function (latitude, longitude, zoom) {
         map.flyTo({ center: [longitude, latitude], zoom: zoom || 15, speed: 1.4 });
       };
 
+      // Обновление точки пользователя без пересоздания маркера: меньше мерцания.
+      // Первый вызов создаёт маркер, последующие только двигают его.
       window.setUserLocation = function (latitude, longitude) {
         if (userMarker) {
           userMarker.setLngLat([longitude, latitude]);
@@ -297,6 +320,8 @@ const HTML_TEMPLATE = String.raw`<!DOCTYPE html>
         userMarker = new maplibregl.Marker({ element: dot }).setLngLat([longitude, latitude]).addTo(map);
       };
 
+      // Экранирование для HTML: название места приходит от пользователя,
+      // без этого можно сломать разметку попапа или внедрить скрипт.
       function escapeHtml(text) {
         return String(text).replace(/[&<>"']/g, function (char) {
           return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char];

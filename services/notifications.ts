@@ -25,8 +25,12 @@ let channelReady = false;
 function configureNotificationHandler(): void {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
+      // Два флага, а не один: shouldShowBanner — полоска сверху, когда приложение
+      // открыто; shouldShowList — запись в шторке, когда свёрнуто. Нужны оба,
+      // чтобы уведомление появлялось в любом состоянии приложения.
       shouldShowBanner: true,
       shouldShowList: true,
+      // Без звука и бейджа: уведомление информационное, не срочное.
       shouldPlaySound: false,
       shouldSetBadge: false,
     }),
@@ -34,7 +38,7 @@ function configureNotificationHandler(): void {
 }
 
 /**
- * Android требует канал до показа первого уведомления, а на Android 13+ без канала система
+ * Android требует канал до показа первого уведомления, а на Android без канала система
  * даже не покажет запрос разрешения. На iOS функция ничего не делает.
  *
  * В Expo Go на Android создание своего канала падает внутри самого Expo Go
@@ -49,7 +53,10 @@ async function setupNotificationChannel(): Promise<void> {
     await Notifications.setNotificationChannelAsync(ANDROID_CHANNEL_ID, {
       name: 'Приближение к месту',
       importance: Notifications.AndroidImportance.HIGH,
+      // [задержка, вибрация, пауза, вибрация] в миллисекундах: два коротких «толчка».
       vibrationPattern: [0, 250, 250, 250],
+      // Розовый из светлой темы. Канал создаётся в _layout до того, как станет
+      // известна активная тема, поэтому цвет захардкожен, а не взят из Colors.
       lightColor: '#C2185B',
     });
     channelReady = true;
@@ -88,12 +95,16 @@ export class NotificationPermissionError extends Error {
  * @throws NotificationPermissionError, если разрешение не выдано.
  */
 export async function ensureNotificationPermission(): Promise<void> {
+  // Сначала канал: на Android без него система не покажет диалог разрешения.
   await setupNotificationChannel();
 
   const current = await Notifications.getPermissionsAsync();
   if (current.granted) {
     return;
   }
+  // canAskAgain различает «ещё не спрашивали / не отказали навсегда» и
+  // «пользователь выбрал Больше не спрашивать». Во втором случае
+  // requestPermissionsAsync вернёт отказ без диалога — сразу ведём в настройки.
   if (!current.canAskAgain) {
     throw new NotificationPermissionError('Уведомления отключены в настройках телефона.', false);
   }
@@ -120,6 +131,9 @@ export class NotificationManager {
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const run = this.queue.then(task);
+    // Гасим ошибку до undefined: следующая операция должна выполниться,
+    // а не унаследовать rejected-обещание предыдущей. Вызывающему ошибка
+    // всё равно вернётся через run.catch в show/remove/checkProximity.
     this.queue = run.catch(() => undefined);
     return run;
   }
@@ -164,6 +178,8 @@ export class NotificationManager {
           this.activeNotifications.set(markerId, {
             markerId,
             notificationId: notification.request.identifier,
+            // notification.date — реальное время показа из системы, а не момент
+            // восстановления: timestamp соответствует событию, а не перезапуску.
             timestamp: notification.date,
           });
         }
@@ -180,7 +196,8 @@ export class NotificationManager {
     return this.enqueue(async () => {
       const currentIds = new Set(markers.map((marker) => marker.id));
 
-      // Метки, которые удалили, пока уведомление было активно.
+      // Метки, которые удалили, пока уведомление было активно. Без этой проверки
+      // уведомление висело бы, пока пользователь не выйдет из зоны, — а зоны уже нет.
       for (const markerId of this.activeMarkerIds()) {
         if (!currentIds.has(markerId)) {
           await this.remove(markerId);
@@ -194,6 +211,8 @@ export class NotificationManager {
         } else if (distance > EXIT_THRESHOLD_METERS) {
           await this.remove(marker.id);
         }
+        // Между радиусами — ничего не делаем: иначе на границе зоны GPS-дрожание
+        // показывало и убирало бы уведомление снова и снова.
       }
     });
   }
@@ -208,10 +227,13 @@ export class NotificationManager {
         content: {
           title: 'Вы рядом с меткой!',
           body: `Вы находитесь рядом с «${marker.title}».`,
+          // markerId в data — чтобы restorePresented после перезапуска
+          // мог понять, по какой метке уведомление уже висит.
           data: { markerId: marker.id },
         },
         // Сразу. Если свой канал создан — в него: у него высокая важность, и уведомление
         // всплывает поверх экрана. Иначе (Expo Go) — в канал по умолчанию.
+        // На iOS channelId игнорируется, и channelReady всегда false — там всегда null.
         trigger: channelReady ? { channelId: ANDROID_CHANNEL_ID } : null,
       });
 
@@ -221,6 +243,9 @@ export class NotificationManager {
         timestamp: Date.now(),
       });
     } catch (error) {
+      // Не бросаем наружу: сбой показа одного уведомления не должен ломать
+      // проверку близости остальных меток. На следующем обновлении координат
+      // попробуем снова.
       console.warn('Не удалось показать уведомление', error);
     }
   }
@@ -236,6 +261,8 @@ export class NotificationManager {
     } catch (error) {
       console.warn('Не удалось убрать уведомление', error);
     } finally {
+      // Удаляем из Map даже при ошибке: следующая проверка близости попробует снова.
+      // Иначе при сбое dismiss запись застряла бы и блокировала повторное уведомление.
       this.activeNotifications.delete(markerId);
     }
   }

@@ -30,10 +30,15 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
   },
   ref,
 ) {
+  // Ссылка на нативную карту: через неё вызываются методы вроде animateToRegion.
   const mapRef = useRef<MapView>(null);
 
+  // Наружу отдаём только focus — остальное приложение не должно знать,
+  // что под этим интерфейсом лежит именно react-native-maps.
   useImperativeHandle(ref, () => ({
     focus: (coordinate: Coordinate) => {
+      // zoom 15 — «улица целиком»: то же значение использует Android-версия в focusOn.
+      // animateToRegion, а не setCamera: система сама выберет анимацию перелёта.
       mapRef.current?.animateToRegion({
         ...coordinate,
         latitudeDelta: zoomToDelta(15),
@@ -48,21 +53,29 @@ const MapSurface = forwardRef<MapSurfaceHandle, MapSurfaceProps>(function MapSur
     <MapView
       ref={mapRef}
       style={StyleSheet.absoluteFill}
+      // initialRegion, а не region: карта запоминает положение сама и не
+      // перецентровывается на каждый ререндер родителя.
       initialRegion={{
         ...initialCoordinate,
         latitudeDelta: zoomToDelta(initialZoom),
         longitudeDelta: zoomToDelta(initialZoom),
       }}
       showsUserLocation={showsUserLocation}
+      // onMapReady — сигнал «плитки отрисовались, карту можно показывать».
+      // По нему Map.tsx убирает индикатор загрузки.
       onMapReady={onReady}
       onLongPress={(event) => onLongPress(event.nativeEvent.coordinate)}>
       {markers.map((marker) => (
+        // HeartMarker — обёртка над Marker: рисует сердечко вместо дефолтной метки.
+        // children (Callout) react-native-maps показывает в облачке по нажатию.
         <HeartMarker
           key={marker.id}
           marker={marker}
           theme={theme}
           onCalloutPress={() => onMarkerPress(marker.id)}>
           <Callout>
+            {/* Подложку облачка рисует система, она всегда светлая — поэтому
+                цвета внутри фиксированные, без темы. */}
             <View style={styles.callout}>
               <Text style={styles.calloutTitle}>{marker.title}</Text>
               <Text style={styles.calloutSubtitle}>

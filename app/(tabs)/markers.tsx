@@ -10,11 +10,14 @@ export default function MarkersScreen() {
   const theme = Colors[useColorScheme() ?? 'light'];
 
   return (
+    // edges={['top']}: отступаем от выреза/строки состояния, но не от нижней
+    // панели вкладок — иначе список уедет вверх.
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
       <Text style={[styles.title, { color: theme.text }]}>Места</Text>
       <Text style={[styles.subtitle, { color: theme.textMuted }]}>
         Нажмите на место, чтобы открыть фотографии. Долгое нажатие — удалить.
       </Text>
+      {/* Пустое состояние, ошибки и карточки — внутри MarkerList. */}
       <MarkerList />
     </SafeAreaView>
   );

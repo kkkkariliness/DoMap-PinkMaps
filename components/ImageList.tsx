@@ -22,20 +22,24 @@ type Props = {
 /** Сетка фотографий места: два столбца, тап — просмотр, кнопка в углу — удаление. */
 export default function ImageList({ images, onRemove }: Props) {
   const theme = Colors[useColorScheme() ?? 'light'];
+  // Ширину берём из окна, а не из onLayout: сетка должна пересчитываться
+  // при повороте экрана и на планшетах, где ширина другая.
   const { width } = useWindowDimensions();
-  // Ширина экрана минус отступы по краям и промежуток между столбцами.
+  // Ширина экрана минус отступы по краям (по 20 с каждой стороны) и промежуток между столбцами.
   const tileSize = (width - 40 - 12) / 2;
 
-  // Фотография, открытая на весь экран.
+  // Фотография, открытая на весь экран. 
   const [preview, setPreview] = useState<MarkerImage | null>(null);
 
   const confirmRemove = (image: MarkerImage) => {
+    // Удаление необратимо, поэтому сначала подтверждение.
     Alert.alert('Удалить фотографию?', 'Файл будет удалён из приложения.', [
       { text: 'Отмена', style: 'cancel' },
       { text: 'Удалить', style: 'destructive', onPress: () => onRemove(image.id) },
     ]);
   };
 
+  // Пустое состояние возвращаем до рендера сетки — не рисуем лишний View ради одного Text.
   if (images.length === 0) {
     return (
       <Text style={[styles.empty, { color: theme.textMuted }]}>
@@ -46,6 +50,8 @@ export default function ImageList({ images, onRemove }: Props) {
 
   return (
     <View style={styles.grid}>
+      {/* key по id, а не по индексу: после удаления фото в середине списка
+          индексы съезжают, и React переиспользовал бы чужие картинки. */}
       {images.map((image) => (
         <View key={image.id} style={{ width: tileSize }}>
           <Pressable onPress={() => setPreview(image)}>
@@ -59,6 +65,9 @@ export default function ImageList({ images, onRemove }: Props) {
               onError={() => console.warn('Не удалось загрузить фото', image.uri)}
             />
           </Pressable>
+          {/* Кнопка удаления — отдельный Pressable, а не часть основного:
+              иначе тап по «x» одновременно открывал бы полноэкранный просмотр.
+              position: absolute выносит её из потока, поэтому она не влияет на сетку. */}
           <Pressable
             style={[styles.removeBadge, { backgroundColor: theme.tint }]}
             hitSlop={8}
@@ -70,9 +79,17 @@ export default function ImageList({ images, onRemove }: Props) {
       ))}
 
       {/* Просмотр на весь экран. */}
-      <Modal visible={preview !== null} transparent animationType="fade" onRequestClose={() => setPreview(null)}>
+      <Modal
+        visible={preview !== null}
+        transparent
+        animationType="fade"
+        // onRequestClose — кнопка «назад» на Android: без него модалку нельзя закрыть аппаратной кнопкой.
+        onRequestClose={() => setPreview(null)}>
+        {/* Тап по фону закрывает просмотр: Pressable растянут на весь экран. */}
         <Pressable style={styles.previewBackdrop} onPress={() => setPreview(null)}>
           {preview && (
+            // contain — фото целиком, без обрезки по краям. cover обрезал бы,
+            // а для просмотра важнее видеть всё изображение.
             <Image source={{ uri: preview.uri }} style={styles.previewImage} resizeMode="contain" />
           )}
           <Text style={styles.previewHint}>Нажмите, чтобы закрыть</Text>

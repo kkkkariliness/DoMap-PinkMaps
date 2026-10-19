@@ -1,6 +1,8 @@
-// This is a shim for web and Android where the tab bar is generally opaque.
+// Заглушка для Android и веба: там панель вкладок непрозрачная,
+// размытие поверх контента не нужно, поэтому фон не задаётся.
 export default undefined;
 
+// На этих платформах панель не перекрывает контент — выступа сверху нет.
 export function useBottomTabOverflow() {
   return 0;
 }

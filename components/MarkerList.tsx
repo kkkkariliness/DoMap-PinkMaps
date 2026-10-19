@@ -9,6 +9,8 @@ import type { MapMarker } from '@/types';
 
 /** Список сохранённых мест: превью последней фотографии, название и координаты. */
 export default function MarkerList() {
+  // Данные приходят из контекста: отдельного запроса здесь нет — список
+  // перечитывается сам после любого изменения (см. afterWrite в DatabaseContext).
   const { markers, isLoading, error, retry, deleteMarker } = useDatabase();
   const theme = Colors[useColorScheme() ?? 'light'];
 
@@ -31,6 +33,8 @@ export default function MarkerList() {
   };
 
   const confirmRemove = (marker: MapMarker) => {
+    // Удаление необратимо: сначала подтверждение, действие — только по кнопке.
+    // void нужен потому, что Alert не ждёт async onPress; ошибки ловит remove.
     Alert.alert('Удалить место?', `«${marker.title}» и все его фотографии.`, [
       { text: 'Отмена', style: 'cancel' },
       { text: 'Удалить', style: 'destructive', onPress: () => void remove(marker) },
@@ -40,8 +44,12 @@ export default function MarkerList() {
   return (
     <FlatList
       data={markers}
+      // key по id, а не по индексу: после удаления элемента из середины индексы
+      // съезжают, и React переиспользовал бы чужие карточки.
       keyExtractor={(item) => String(item.id)}
       contentContainerStyle={styles.list}
+      // ListEmptyComponent рендерится и при пустом списке, и при ошибке загрузки —
+      // поэтому внутри проверяем, что именно показать.
       ListEmptyComponent={
         // Пока данные читаются, не пишем «пусто» — это было бы неправдой.
         isLoading ? null : error ? (
@@ -60,6 +68,8 @@ export default function MarkerList() {
         )
       }
       renderItem={({ item }) => (
+        // style как функция: Pressable получает pressed, и карточка
+        // приглушается на время касания.
         <Pressable
           style={({ pressed }) => [
             styles.card,
@@ -67,8 +77,13 @@ export default function MarkerList() {
             pressed && styles.cardPressed,
           ]}
           onPress={() => openMarker(item.id)}
+          // Долгое нажатие — удаление. Так основной жест (тап) остаётся открытием,
+          // а деструктивное действие спрятано за долгим удержанием.
           onLongPress={() => confirmRemove(item)}>
           <View style={[styles.thumbnail, { backgroundColor: theme.background }]}>
+            {/* Превью — последнее добавленное фото, его отдаёт selectMarkers одним запросом.
+                Если фото нет, показываем контурное сердечко — тот же визуальный язык,
+                что и на карте. */}
             {item.previewUri ? (
               <Image source={{ uri: item.previewUri }} style={styles.thumbnailImage} />
             ) : (
@@ -77,9 +92,13 @@ export default function MarkerList() {
           </View>
 
           <View style={styles.cardText}>
+            {/* numberOfLines={1} — длинное название обрезается многоточием,
+                а не переносится на вторую строку и не ломает высоту карточки. */}
             <Text style={[styles.cardTitle, { color: theme.text }]} numberOfLines={1}>
               {item.title}
             </Text>
+            {/* toFixed(4) — примерно 10 метров точности: достаточно, чтобы
+                отличить два соседних места, но не перегружает карточку цифрами. */}
             <Text style={[styles.cardSubtitle, { color: theme.textMuted }]}>
               {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)}
             </Text>
@@ -96,6 +115,8 @@ export default function MarkerList() {
 }
 
 const styles = StyleSheet.create({
+  // paddingBottom: 120 — запас под плавающую панель вкладок, иначе последняя
+  // карточка уходит под неё.
   list: { paddingHorizontal: 20, paddingBottom: 120, gap: 12 },
   empty: { fontSize: 15, paddingTop: 40, textAlign: 'center', lineHeight: 22 },
   errorBox: { alignItems: 'center', gap: 16 },
@@ -109,6 +130,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     borderWidth: 1,
   },
+  // Эффект нажатия только через opacity: тень и фон не пересчитываются — дешевле.
   cardPressed: { opacity: 0.7 },
   thumbnail: {
     width: 64,
